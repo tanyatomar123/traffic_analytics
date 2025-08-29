@@ -2,3 +2,6 @@ ultralytics>=8.0.0
 supervision>=0.21.0
 opencv-python
 numpy
+streamlit
+opencv-python-headless
+numpy
