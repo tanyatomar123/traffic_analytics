@@ -4,7 +4,6 @@ from PIL import Image
 import tempfile
 import os
 import sys
-import subprocess
 
 # Set page config
 st.set_page_config(
@@ -13,59 +12,50 @@ st.set_page_config(
     layout="wide"
 )
 
-# Function to install missing packages
-def install_package(package_name):
-    try:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", package_name])
-        return True
-    except subprocess.CalledProcessError:
-        return False
-
-# Try to import cv2 with fallback
+# Check and import required packages
 try:
     import cv2
     st.sidebar.success("✅ OpenCV imported successfully!")
 except ImportError:
-    st.warning("OpenCV not found. Attempting to install...")
-    if install_package("opencv-python-headless==4.5.5.64"):
-        try:
-            import cv2
-            st.sidebar.success("✅ OpenCV installed and imported!")
-        except ImportError:
-            st.error("Failed to import OpenCV after installation.")
-            st.stop()
-    else:
-        st.error("Failed to install OpenCV. Please install manually: pip install opencv-python-headless==4.5.5.64")
-        st.stop()
+    st.error("""
+    ❌ OpenCV not found. Please install required packages first:
+    
+    **Run this command in your terminal:**
+    ```bash
+    pip install -r requirements.txt
+    ```
+    
+    Then restart the app.
+    """)
+    st.stop()
 
-# Try importing Ultralytics
 try:
     from ultralytics import YOLO
     st.sidebar.success("✅ Ultralytics imported successfully!")
 except ImportError:
-    st.warning("Ultralytics not found. Attempting to install...")
-    if install_package("ultralytics==8.0.20"):
-        try:
-            from ultralytics import YOLO
-            st.sidebar.success("✅ Ultralytics installed and imported!")
-        except ImportError:
-            st.error("Failed to import Ultralytics after installation.")
-            st.stop()
-    else:
-        st.error("Failed to install Ultralytics. Please install manually: pip install ultralytics==8.0.20")
-        st.stop()
+    st.error("""
+    ❌ Ultralytics not found. Please install required packages first:
+    
+    **Run this command in your terminal:**
+    ```bash
+    pip install -r requirements.txt
+    ```
+    
+    Then restart the app.
+    """)
+    st.stop()
 
 # App title and description
-st.title("🚦 Simple Traffic Analytics Dashboard")
+st.title("🚦 Traffic Analytics Dashboard")
 st.markdown("""
-This app uses YOLOv8 for vehicle detection. Upload an image to get started.
+This app uses YOLOv8 for vehicle detection and traffic analysis. Upload an image to get started.
 """)
 
 # Sidebar
 st.sidebar.header("Settings")
 confidence_threshold = st.sidebar.slider("Confidence Threshold", 0.0, 1.0, 0.5, 0.05)
 
-# Use built-in YOLOv8n model (no download needed)
+# Use built-in YOLOv8n model
 model_type = "yolov8n.pt"
 
 @st.cache_resource
@@ -85,7 +75,7 @@ if model is None:
     st.error("Failed to load model. Please check your installation.")
     st.stop()
 
-# File upload - Only images for simplicity
+# File upload
 uploaded_file = st.file_uploader(
     "Upload an image",
     type=["jpg", "jpeg", "png"],
@@ -109,15 +99,17 @@ def process_image(image, model, conf_threshold):
         annotated_image = result.plot()
         annotated_image_rgb = cv2.cvtColor(annotated_image, cv2.COLOR_BGR2RGB)
         
-        # Count vehicles (filter for vehicle classes: car, truck, bus, motorcycle)
-        vehicle_classes = [2, 3, 5, 7]  # COCO dataset classes for vehicles
+        # Count vehicles
+        vehicle_classes = [2, 3, 5, 7]  # COCO classes: car, motorcycle, bus, truck
         vehicle_count = 0
+        
         if result.boxes is not None:
             for box in result.boxes:
                 if int(box.cls) in vehicle_classes:
                     vehicle_count += 1
         
         return annotated_image_rgb, vehicle_count
+        
     except Exception as e:
         st.error(f"Error processing image: {e}")
         return image, 0
@@ -155,7 +147,7 @@ else:
     
     ### Supported vehicles:
     - Cars 🚗
-    - Trucks 🚚
+    - Trucks 🚚  
     - Buses 🚌
     - Motorcycles 🏍️
     """)
@@ -169,4 +161,9 @@ if st.sidebar.checkbox("Show debug info"):
     st.sidebar.write("### System Information")
     st.sidebar.write(f"Python: {sys.version}")
     st.sidebar.write(f"OpenCV: {cv2.__version__}")
+    try:
+        import ultralytics
+        st.sidebar.write(f"Ultralytics: {ultralytics.__version__}")
+    except:
+        st.sidebar.write("Ultralytics: Not available")
     st.sidebar.write("✅ All systems operational!")
