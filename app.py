@@ -1,116 +1,52 @@
-import cv2
-import numpy as np
-import math
+# app.py
+import streamlit as st
 from ultralytics import YOLO
-import gradio as gr
+import tempfile
+import cv2
 from PIL import Image
 
-# Load YOLOv8 model
-model = YOLO("yolov8n.pt")
+# --------------------------
+# Load YOLO model
+# --------------------------
+# Use your trained model path here (e.g., "runs/detect/train/weights/best.pt")
+MODEL_PATH = "yolov8n.pt"  # replace with your trained model
+model = YOLO(MODEL_PATH)
 
-# Lane polygons
-lanes = {
-    "Lane 1": np.array([(698, 458),(645, 493),(705, 513),(757, 478)]),
-    "Lane 2": np.array([(672, 587),(633, 639),(665, 648),(706, 597)]),
-    "Lane 3": np.array([(831, 540),(738, 705),(858, 724),(900, 550)]),
-    "Lane 4": np.array([(1001, 549),(1032, 708),(1147, 697),(1072, 549)]),
-    "Lane 5": np.array([(1040, 435),(1231, 692),(1327, 666),(1070, 431)]),
-    "Lane 6": np.array([(1292, 585),(1421, 703),(1429, 603),(1352, 543)]),
-}
+st.title("🎒 Baggage Detection with YOLOv8")
+st.write("Upload an image or video to detect baggage.")
 
-def point_in_lane(point, lane_polygon):
-    return cv2.pointPolygonTest(lane_polygon, point, False) >= 0
+# --------------------------
+# Upload file
+# --------------------------
+uploaded_file = st.file_uploader("Upload an image or video", type=["jpg", "jpeg", "png", "mp4", "mov", "avi"])
 
-def analyze_video(video_file):
-    cap = cv2.VideoCapture(video_file)
-    fps = cap.get(cv2.CAP_PROP_FPS)  
-    pixel_per_meter = 8.0    
+if uploaded_file is not None:
+    suffix = uploaded_file.name.split(".")[-1].lower()
 
-    total_lane_counts = {lane_name: 0 for lane_name in lanes}
-    counted_vehicles = {lane_name: set() for lane_name in lanes}
-    vehicle_tracks = {} 
+    # Save uploaded file temporarily
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=f".{suffix}")
+    temp_file.write(uploaded_file.read())
+    temp_file_path = temp_file.name
 
-    # Output video writer
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    out = cv2.VideoWriter("output.mp4", fourcc, fps, 
-                          (int(cap.get(3)), int(cap.get(4))))
+    if suffix in ["jpg", "jpeg", "png"]:
+        # --------------------------
+        # Handle Image
+        # --------------------------
+        st.image(temp_file_path, caption="Uploaded Image", use_column_width=True)
 
-    while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret:
-            break
+        results = model(temp_file_path)  # Run YOLO inference
+        for r in results:
+            im_bgr = r.plot()  # YOLO result with bounding boxes
+            im_rgb = cv2.cvtColor(im_bgr, cv2.COLOR_BGR2RGB)
+            st.image(im_rgb, caption="Detection Result", use_column_width=True)
 
-        results = model.track(frame, persist=True, tracker="bytetrack.yaml")
+    else:
+        # --------------------------
+        # Handle Video
+        # --------------------------
+        st.video(temp_file_path)
 
-        if results[0].boxes.id is not None:
-            for box, track_id in zip(results[0].boxes, results[0].boxes.id):
-                cls_id = int(box.cls[0])
-                label = model.names[cls_id]
-                track_id = int(track_id)
+        results = model.predict(source=temp_file_path, save=True, save_txt=False)
 
-                if label != "car":
-                    continue
-
-                x1, y1, x2, y2 = map(int, box.xyxy[0])   
-                cx, cy = (x1 + x2) // 2, y2             
-
-                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                cv2.putText(frame, f"{label}", (x1, y1 - 5),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-                cv2.circle(frame, (cx, cy), 4, (0, 0, 255), -1)
-
-                if track_id in vehicle_tracks:
-                    prev_pos = vehicle_tracks[track_id]["pos"]
-                    prev_frame = vehicle_tracks[track_id]["frame"]
-                    dx, dy = cx - prev_pos[0], cy - prev_pos[1]
-                    dist_pixels = math.sqrt(dx*dx + dy*dy)
-                    frames_passed = cap.get(cv2.CAP_PROP_POS_FRAMES) - prev_frame
-
-                    if frames_passed > 0:
-                        speed_mps = (dist_pixels / pixel_per_meter) * (fps / frames_passed)
-                        speed_kmh = speed_mps * 3.6
-                        vehicle_tracks[track_id]["speeds"].append(speed_kmh)
-                        avg_speed = np.mean(vehicle_tracks[track_id]["speeds"])
-                        cv2.putText(frame, f"{int(avg_speed)} km/h", (x1, y2 + 15),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 1)
-
-                vehicle_tracks[track_id] = {
-                    "pos": (cx, cy),
-                    "frame": cap.get(cv2.CAP_PROP_POS_FRAMES),
-                    "speeds": vehicle_tracks.get(track_id, {}).get("speeds", [])
-                }
-
-                for lane_name, polygon in lanes.items():
-                    if point_in_lane((cx, cy), polygon):
-                        if track_id not in counted_vehicles[lane_name]:
-                            total_lane_counts[lane_name] += 1
-                            counted_vehicles[lane_name].add(track_id)
-
-        y_offset = 30
-        for lane_name, count in total_lane_counts.items():
-            text = f"{lane_name}: {count}"
-            (text_w, text_h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)
-            cv2.rectangle(frame, (20, y_offset - text_h - 5),
-                          (20 + text_w + 10, y_offset + 5), (0, 0, 0), -1)
-            cv2.putText(frame, text, (25, y_offset),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
-            y_offset += 40
-
-        out.write(frame)
-
-    cap.release()
-    out.release()
-
-    return "output.mp4"
-
-# Gradio app
-demo = gr.Interface(
-    fn=analyze_video,
-    inputs=gr.Video(label="Upload Traffic Video"),
-    outputs=gr.Video(label="Processed Video"),
-    title="Traffic Analytics with YOLOv8",
-    description="Upload a video to detect cars, estimate speed, and count lane-wise vehicles."
-)
-
-if __name__ == "__main__":
-    demo.launch(server_name="0.0.0.0", server_port=7860)
+        st.success("✅ Detection complete. Processed video saved in `runs/detect/predict/` folder.")
+        st.write("You can check the folder for the output video with bounding boxes.")
