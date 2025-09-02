@@ -1,7 +1,6 @@
-streamlit
-ultralytics==8.0.196
-opencv-python-headless
-torch==2.0.1+cpu
-torchvision==0.15.2+cpu
-torchaudio==2.0.2+cpu
--f https://download.pytorch.org/whl/cpu/torch_stable.html
+streamlit>=1.28.0
+ultralytics>=8.0.0
+torch>=2.0.0
+pillow>=10.0.0
+numpy>=1.24.0
+opencv-python-headless>=4.7.0
