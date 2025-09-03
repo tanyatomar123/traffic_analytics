@@ -1,4 +1,4 @@
-# streamlit_app.py
+# streamlit_baggage_detection.py
 import streamlit as st
 import torch
 from PIL import Image, ImageDraw
@@ -8,11 +8,25 @@ import cv2
 import tempfile
 import os
 import time
+from pathlib import Path
+
+# Set page config
+st.set_page_config(
+    page_title="Baggage Detection System",
+    page_icon="🧳",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
 class BaggageDetector:
     def __init__(self, model_path='yolov8n.pt'):
         # Load the specified model
-        self.model = YOLO(model_path)
+        try:
+            self.model = YOLO(model_path)
+            st.sidebar.success(f"Loaded model: {model_path}")
+        except Exception as e:
+            st.sidebar.error(f"Error loading model: {str(e)}")
+            self.model = None
         
         # Expanded baggage-related classes from COCO dataset
         self.baggage_classes = {
@@ -30,8 +44,8 @@ class BaggageDetector:
 
     def detect_image(self, image):
         """Detect baggage in a single image"""
-        if image is None:
-            return None, "Please upload an image"
+        if image is None or self.model is None:
+            return None, "Model not loaded properly"
         
         try:
             # Convert to numpy array
@@ -88,10 +102,10 @@ class BaggageDetector:
         except Exception as e:
             return None, f"Error processing image: {str(e)}"
 
-    def detect_video(self, video_path, progress_bar=None):
+    def detect_video(self, video_path, progress_bar=None, status_text=None):
         """Detect baggage in a video and create annotated output"""
-        if video_path is None:
-            return None, "Please upload a video"
+        if video_path is None or self.model is None:
+            return None, "Model not loaded properly"
         
         try:
             # Create temporary output file
@@ -119,8 +133,9 @@ class BaggageDetector:
             total_detections = 0
             
             # Progress bar
-            if progress_bar:
+            if progress_bar and status_text:
                 progress_bar.progress(0)
+                status_text.text("Starting video processing...")
             
             # Process video frame by frame
             while frame_count < max_frames:
@@ -167,7 +182,10 @@ class BaggageDetector:
                 
                 # Update progress
                 if progress_bar and total_frames > 0:
-                    progress_bar.progress(frame_count / total_frames)
+                    progress = frame_count / total_frames
+                    progress_bar.progress(progress)
+                    if status_text:
+                        status_text.text(f"Processing frame {frame_count}/{total_frames} ({progress*100:.1f}%)")
             
             # Release resources
             cap.release()
@@ -192,21 +210,30 @@ class BaggageDetector:
             return None, f"Error processing video: {str(e)}"
 
 def main():
-    st.set_page_config(
-        page_title="Baggage Detection System",
-        page_icon="🧳",
-        layout="wide"
-    )
+    st.title("🧳 Baggage Detection System")
+    st.markdown("### Detect baggage items in images and videos using YOLOv8")
     
-    st.title("🧳 BAGGAGE DETECTION SYSTEM")
-    st.markdown("### Supports both Images and Videos with full video processing!")
+    # Initialize session state
+    if 'detector' not in st.session_state:
+        st.session_state.detector = None
+    if 'model_path' not in st.session_state:
+        st.session_state.model_path = 'yolov8n.pt'
     
-    # Model selection
+    # Sidebar for model selection
     st.sidebar.header("Model Configuration")
+    
     model_option = st.sidebar.selectbox(
         "Choose YOLO Model",
         ["YOLOv8 Nano (fast)", "YOLOv8 Small", "YOLOv8 Medium", "YOLOv8 Large", "Custom Model"]
     )
+    
+    # Map model selection to actual model paths
+    model_paths = {
+        "YOLOv8 Nano (fast)": "yolov8n.pt",
+        "YOLOv8 Small": "yolov8s.pt",
+        "YOLOv8 Medium": "yolov8m.pt",
+        "YOLOv8 Large": "yolov8l.pt"
+    }
     
     custom_model_path = None
     if model_option == "Custom Model":
@@ -217,20 +244,22 @@ def main():
             with open(custom_model_path, "wb") as f:
                 f.write(custom_model_file.getbuffer())
             st.sidebar.success("Custom model uploaded!")
-    
-    # Map model selection to actual model paths
-    model_paths = {
-        "YOLOv8 Nano (fast)": "yolov8n.pt",
-        "YOLOv8 Small": "yolov8s.pt",
-        "YOLOv8 Medium": "yolov8m.pt",
-        "YOLOv8 Large": "yolov8l.pt"
-    }
+            st.session_state.model_path = custom_model_path
+        else:
+            st.session_state.model_path = 'yolov8n.pt'
+    else:
+        st.session_state.model_path = model_paths[model_option]
     
     # Initialize detector
-    if model_option == "Custom Model" and custom_model_path:
-        detector = BaggageDetector(custom_model_path)
-    else:
-        detector = BaggageDetector(model_paths[model_option])
+    if st.sidebar.button("Initialize/Reload Model"):
+        with st.spinner("Loading model..."):
+            st.session_state.detector = BaggageDetector(st.session_state.model_path)
+    
+    if st.session_state.detector is None:
+        st.info("Please initialize the model from the sidebar to get started.")
+        if st.sidebar.button("Initialize Default Model"):
+            with st.spinner("Loading default model..."):
+                st.session_state.detector = BaggageDetector('yolov8n.pt')
     
     # Create tabs
     tab1, tab2 = st.tabs(["📷 Image Detection", "🎥 Video Detection"])
@@ -252,20 +281,23 @@ def main():
                 st.image(image, caption="Original Image", use_column_width=True)
                 
                 if st.button("🔍 Detect Baggage in Image", type="primary"):
-                    with st.spinner("Processing image..."):
-                        annotated_img, detections = detector.detect_image(image)
-                        
-                        if annotated_img:
-                            with col2:
-                                st.image(annotated_img, caption="Detected Baggage", use_column_width=True)
-                                
-                                if detections:
-                                    st.success(f"✅ Found {len(detections)} baggage items!")
-                                    for i, det in enumerate(detections, 1):
-                                        st.write(f"{i}. **{det['class'].upper()}** (confidence: {det['confidence']:.2f})")
-                                else:
-                                    st.warning("❌ No baggage detected")
-                                    st.info("Try: Clearer image, better lighting, or different baggage types")
+                    if st.session_state.detector is None:
+                        st.error("Please initialize the model first from the sidebar.")
+                    else:
+                        with st.spinner("Processing image..."):
+                            annotated_img, detections = st.session_state.detector.detect_image(image)
+                            
+                            if annotated_img:
+                                with col2:
+                                    st.image(annotated_img, caption="Detected Baggage", use_column_width=True)
+                                    
+                                    if detections:
+                                        st.success(f"✅ Found {len(detections)} baggage items!")
+                                        for i, det in enumerate(detections, 1):
+                                            st.write(f"{i}. **{det['class'].upper()}** (confidence: {det['confidence']:.2f})")
+                                    else:
+                                        st.warning("❌ No baggage detected")
+                                        st.info("Try: Clearer image, better lighting, or different baggage types")
     
     with tab2:
         st.header("Video Baggage Detection")
@@ -290,46 +322,50 @@ def main():
                 st.video(uploaded_video)
                 
                 if st.button("🔍 Detect Baggage in Video", type="primary"):
-                    progress_bar = st.progress(0)
-                    status_text = st.empty()
-                    
-                    with st.spinner("Processing video..."):
-                        status_text.text("Starting video processing...")
-                        output_video, summary = detector.detect_video(video_path, progress_bar)
+                    if st.session_state.detector is None:
+                        st.error("Please initialize the model first from the sidebar.")
+                    else:
+                        progress_bar = st.progress(0)
+                        status_text = st.empty()
                         
-                        progress_bar.empty()
-                        status_text.empty()
-                        
-                        if output_video:
-                            with col2:
-                                st.success("✅ Video processing complete!")
-                                
-                                # Show processed video
-                                with open(output_video, "rb") as video_file:
-                                    video_bytes = video_file.read()
-                                st.video(video_bytes)
-                                
-                                # Download button
-                                st.download_button(
-                                    label="📥 Download Processed Video",
-                                    data=video_bytes,
-                                    file_name="baggage_detected_video.mp4",
-                                    mime="video/mp4"
-                                )
-                                
-                                # Show summary
-                                st.text_area("Analysis Summary", summary, height=150)
-                                
-                            # Clean up temporary files
-                            try:
-                                os.remove(video_path)
-                                os.remove(output_video)
-                                if custom_model_path and os.path.exists(custom_model_path):
-                                    os.remove(custom_model_path)
-                            except:
-                                pass
+                        with st.spinner("Processing video..."):
+                            output_video, summary = st.session_state.detector.detect_video(
+                                video_path, progress_bar, status_text
+                            )
+                            
+                            progress_bar.empty()
+                            status_text.empty()
+                            
+                            if output_video:
+                                with col2:
+                                    st.success("✅ Video processing complete!")
+                                    
+                                    # Show processed video
+                                    with open(output_video, "rb") as video_file:
+                                        video_bytes = video_file.read()
+                                    st.video(video_bytes)
+                                    
+                                    # Download button
+                                    st.download_button(
+                                        label="📥 Download Processed Video",
+                                        data=video_bytes,
+                                        file_name="baggage_detected_video.mp4",
+                                        mime="video/mp4"
+                                    )
+                                    
+                                    # Show summary
+                                    st.text_area("Analysis Summary", summary, height=150)
+                                    
+                                # Clean up temporary files
+                                try:
+                                    os.remove(video_path)
+                                    os.remove(output_video)
+                                    if custom_model_path and os.path.exists(custom_model_path):
+                                        os.remove(custom_model_path)
+                                except:
+                                    pass
     
-    # Instructions
+    # Instructions and information
     st.sidebar.header("📋 Instructions")
     st.sidebar.info("""
     **Supported Formats:**
@@ -349,7 +385,21 @@ def main():
     - Larger models (Large, Medium) are more accurate but slower
     - Nano model is fastest but less accurate
     - Video processing time depends on length and model size
+    - Initialize the model first before processing
     """)
+    
+    # Requirements info
+    st.sidebar.header("📦 Requirements")
+    st.sidebar.code("""
+torch>=2.0.0
+torchvision>=0.15.0
+ultralytics>=8.0.0
+gradio>=4.0.0
+pillow>=10.0.0
+opencv-python-headless>=4.7.0
+numpy>=1.24.0
+streamlit>=1.22.0
+""")
 
 if __name__ == "__main__":
     main()
